@@ -57,6 +57,12 @@ typedef struct _camctl_camera_job_t
   _camctl_camera_job_type_t type;
 } _camctl_camera_job_t;
 
+typedef struct _camctl_camera_execute_capture_job_t
+{
+  _camctl_camera_job_type_t type;
+  double bulb_time;
+} _camctl_camera_execute_capture_job_t;
+
 typedef struct _camctl_camera_set_property_string_job_t
 {
   _camctl_camera_job_type_t type;
@@ -92,11 +98,19 @@ void _camera_configuration_commit(const dt_camctl_t *c, const dt_camera_t *camer
  * widget is notified as change */
 void _camera_configuration_merge(const dt_camctl_t *c, const dt_camera_t *camera, CameraWidget *source,
                                  CameraWidget *destination, gboolean notify_all);
+
+/** capture image */
+int _camera_capture(const dt_camctl_t *c, const dt_camera_t *camera, CameraFilePath *path, double bulb_time);
+
+/** callback to signal that new image has been download */
+void _image_downloaded_callback(const dt_camera_t *camera, const char *filename, void *data);
+
 /** Put a job on the queue */
 void _camera_add_job(const dt_camctl_t *c, const dt_camera_t *camera, gpointer job);
 /** Get a job from the queue */
 gpointer _camera_get_job(const dt_camctl_t *c, const dt_camera_t *camera);
 static void _camera_process_job(const dt_camctl_t *c, const dt_camera_t *camera, gpointer job);
+
 
 /** Dispatch functions for listener interfaces */
 const char *_dispatch_request_image_path(const dt_camctl_t *c, const dt_camera_t *camera);
@@ -276,38 +290,59 @@ static void _camera_process_job(const dt_camctl_t *c, const dt_camera_t *camera,
       dt_print(DT_DEBUG_CAMCTL, "[camera_control] executing remote camera capture job\n");
       CameraFilePath fp;
       int res = GP_OK;
-      if((res = gp_camera_capture(camera->gpcam, GP_CAPTURE_IMAGE, &fp, c->gpcontext)) == GP_OK)
+      _camctl_camera_execute_capture_job_t *ecj = (_camctl_camera_execute_capture_job_t *)job;
+      
+      bool downloaded=false;
+      dt_camctl_listener_t listener;
+      listener.data=&downloaded;
+      listener.image_downloaded=_image_downloaded_callback;
+      dt_camctl_register_listener(c, &listener);
+      
+      if((res = _camera_capture(c, camera, &fp, ecj->bulb_time)) == GP_OK)
       {
-        CameraFile *destination;
-        const char *output_path = _dispatch_request_image_path(c, camera);
-        if(!output_path) output_path = "/tmp";
-
-        const char *fname = _dispatch_request_image_filename(c, fp.name, cam);
-        if(!fname) break;
-
-        char *output = g_build_filename(output_path, fname, (char *)NULL);
-
-        int handle = open(output, O_CREAT | O_WRONLY, 0666);
-        if(handle != -1)
+        if(strlen(fp.name))
         {
-          gp_file_new_from_fd(&destination, handle);
-          if(gp_camera_file_get(camera->gpcam, fp.folder, fp.name, GP_FILE_TYPE_NORMAL, destination,
-                                c->gpcontext) == GP_OK)
+          CameraFile *destination;
+          const char *output_path = _dispatch_request_image_path(c, camera);
+          if(!output_path) output_path = "/tmp";
+
+          const char *fname = _dispatch_request_image_filename(c, fp.name, cam);
+          if(!fname) break;
+
+          char *output = g_build_filename(output_path, fname, (char *)NULL);
+
+          int handle = open(output, O_CREAT | O_WRONLY, 0666);
+          if(handle != -1)
           {
-            // Notify listeners of captured image
-            _dispatch_camera_image_downloaded(c, camera, output);
+            dt_print(DT_DEBUG_CAMCTL, "[camera_control] trying to download file %s from %s/%s\n", output, fp.folder, fp.name);
+            gp_file_new_from_fd(&destination, handle);
+            if(gp_camera_file_get(camera->gpcam, fp.folder, fp.name, GP_FILE_TYPE_NORMAL, destination,
+                                  c->gpcontext) == GP_OK)
+            {
+              // Notify listeners of captured image
+              _dispatch_camera_image_downloaded(c, camera, output);
+            }
+            else
+              dt_print(DT_DEBUG_CAMCTL, "[camera_control] failed to download file %s\n", output);
+            close(handle);
           }
           else
             dt_print(DT_DEBUG_CAMCTL, "[camera_control] failed to download file %s\n", output);
-          close(handle);
+          g_free(output);
         }
         else
-          dt_print(DT_DEBUG_CAMCTL, "[camera_control] failed to download file %s\n", output);
-        g_free(output);
+        {
+          //wait notification of captured image (trying to perform another job before will result in "E/S busy" error)
+          while(!(*(bool*)listener.data))
+          {
+            _camera_poll_events(c, camera);
+          }
+        }
       }
       else
         dt_print(DT_DEBUG_CAMCTL, "[camera_control] capture job failed to capture image: %s\n",
                  gp_result_as_string(res));
+      dt_camctl_unregister_listener(c, &listener);
     }
     break;
 
@@ -805,6 +840,12 @@ gboolean _camera_initialize(const dt_camctl_t *c, dt_camera_t *cam)
 
     // read a full copy of config to configuration cache
     gp_camera_get_config(cam->gpcam, &cam->configuration, c->gpcontext);
+    
+    if(dt_camctl_camera_property_exists(camctl, cam, "eosremoterelease") ||
+       dt_camctl_camera_property_exists(camctl, cam, "bulb"))
+    {
+      cam->can_bulb = TRUE;
+    }
 
     // TODO: find a more robust way for this, once we find out how to do it with non-EOS cameras
     if(cam->can_live_view && dt_camctl_camera_property_exists(camctl, cam, "eoszoomposition"))
@@ -1295,7 +1336,7 @@ const char *dt_camctl_camera_property_get_next_choice(const dt_camctl_t *c, cons
   return value;
 }
 
-void dt_camctl_camera_capture(const dt_camctl_t *c, const dt_camera_t *cam)
+void dt_camctl_camera_capture(const dt_camctl_t *c, const dt_camera_t *cam, double bulb_time)
 {
   dt_camctl_t *camctl = (dt_camctl_t *)c;
   if(!cam && (cam = camctl->active_camera) == NULL)
@@ -1305,8 +1346,9 @@ void dt_camctl_camera_capture(const dt_camctl_t *c, const dt_camera_t *cam)
   }
   dt_camera_t *camera = (dt_camera_t *)cam;
 
-  _camctl_camera_job_t *job = g_malloc(sizeof(_camctl_camera_job_t));
+  _camctl_camera_execute_capture_job_t *job = g_malloc(sizeof(_camctl_camera_execute_capture_job_t));
   job->type = _JOB_TYPE_EXECUTE_CAPTURE;
+  job->bulb_time=bulb_time;
   _camera_add_job(camctl, camera, job);
 }
 
@@ -1354,6 +1396,7 @@ void _camera_poll_events(const dt_camctl_t *c, const dt_camera_t *cam)
                                 c->gpcontext) == GP_OK)
           {
             // Notify listeners of captured image
+            dt_print(DT_DEBUG_CAMCTL, "Notify image downloaded\n");
             _dispatch_camera_image_downloaded(c, cam, output);
           }
           else
@@ -1463,6 +1506,70 @@ void _camera_configuration_update(const dt_camctl_t *c, const dt_camera_t *camer
   // merge remote copy with cache and notify on changed properties to host application
   _camera_configuration_merge(c, camera, remote, camera->configuration, FALSE);
   dt_pthread_mutex_unlock(&cam->config_lock);
+}
+
+int _camera_capture(const dt_camctl_t *c, const dt_camera_t *camera, CameraFilePath *path, double bulb_time)
+{
+  dt_print(DT_DEBUG_CAMCTL, "camera capture...\n");
+  int res=GP_OK;
+  CameraWidget *config;
+  CameraWidget *widget;
+  const char *str=NULL;
+  gp_camera_get_config(camera->gpcam, &config, c->gpcontext);
+  //check for bulb mode : check model by presence of "eoseremoterelease", and assume bulb is first mode of "shutterspeed"
+  // TODO : has to be tested with more camera models
+  if(bulb_time != 0.0)
+  {
+    if((res=gp_widget_get_child_by_name(config, "eosremoterelease", &widget)) == GP_OK)
+    {
+      gp_widget_get_choice(widget, 2, &str);
+      gp_widget_set_value(widget, str);
+      if((res=gp_camera_set_config(camera->gpcam, config, c->gpcontext)) != GP_OK)
+      {
+        dt_print(DT_DEBUG_CAMCTL, "starting bulb failed with code %d : %s\n", res, gp_result_as_string(res));
+        return res;
+      }
+      
+      g_usleep(bulb_time * G_USEC_PER_SEC);
+      
+      gp_widget_get_choice(widget, 4, &str);
+      gp_widget_set_value(widget, str);
+      res=gp_camera_set_config(camera->gpcam, config, c->gpcontext);
+    }
+    else if((res=gp_widget_get_child_by_name(config, "bulb", &widget)) == GP_OK)
+    {
+      gp_widget_get_choice(widget, 1, &str);
+      gp_widget_set_value(widget, str);
+      if((res=gp_camera_set_config(camera->gpcam, config, c->gpcontext)) != GP_OK)
+      {
+        dt_print(DT_DEBUG_CAMCTL, "starting bulb failed with code %d : %s\n", res, gp_result_as_string(res));
+        return res;
+      }
+      
+      g_usleep(bulb_time * G_USEC_PER_SEC);
+      
+      gp_widget_get_choice(widget, 0, &str);
+      gp_widget_set_value(widget, str);
+      res=gp_camera_set_config(camera->gpcam, config, c->gpcontext);
+    }
+    else
+    {
+      //THIS SHOULD NEVER HAPPEN
+      dt_print(DT_DEBUG_CAMCTL, "Camera does not support bulb mode\n");
+    }
+    path->folder[0]=path->name[0]='\0';
+  }
+  else
+  {
+    res=gp_camera_capture(camera->gpcam, GP_CAPTURE_IMAGE, path, c->gpcontext);
+  }
+  return res;
+}
+
+void _image_downloaded_callback(const dt_camera_t *camera, const char *filename, void *data)
+{
+  bool *downloaded=data;
+  *downloaded=true;
 }
 
 const char *_dispatch_request_image_filename(const dt_camctl_t *c, const char *filename,

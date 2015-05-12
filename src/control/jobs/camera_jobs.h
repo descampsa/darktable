@@ -26,7 +26,7 @@
 
 /** Camera capture job */
 dt_job_t *dt_camera_capture_job_create(const char *jobcode, uint32_t delay, uint32_t count, uint32_t brackets,
-                                       uint32_t steps);
+                                       uint32_t steps, uint32_t bulb_time);
 
 /** camera get previews job. */
 dt_job_t *dt_camera_get_previews_job_create(struct dt_camera_t *camera, struct dt_camctl_listener_t *listener,

@@ -54,6 +54,8 @@ typedef struct dt_camera_t
   gboolean can_live_view_advanced;
   /** This camera/device can be remote controlled. */
   gboolean can_config;
+  /** This camera/device can do bulb capture. */
+  gboolean can_bulb;
 
   /** Flag camera in tethering mode. \see dt_camera_tether_mode() */
   gboolean is_tethering;
@@ -227,7 +229,7 @@ void dt_camctl_get_previews(const dt_camctl_t *c, dt_camera_preview_flags_t flag
 void dt_camctl_import(const dt_camctl_t *c, const dt_camera_t *cam, GList *images);
 
 /** Execute remote capture of camera.*/
-void dt_camctl_camera_capture(const dt_camctl_t *c, const dt_camera_t *cam);
+void dt_camctl_camera_capture(const dt_camctl_t *c, const dt_camera_t *cam, double bulb_time);
 /** Start live view of camera.*/
 gboolean dt_camctl_camera_start_live_view(const dt_camctl_t *c);
 /** Stop live view of camera.*/

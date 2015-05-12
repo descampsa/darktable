@@ -47,6 +47,8 @@ typedef struct dt_camera_capture_t
   /** steps for each bracket, only used ig bracket capture*/
   uint32_t steps;
 
+  uint32_t bulb_time;
+
 } dt_camera_capture_t;
 
 typedef struct dt_camera_get_previews_t
@@ -99,6 +101,19 @@ static int32_t dt_camera_capture_job_run(dt_job_t *job)
   const char *cvalue = dt_camctl_camera_get_property(darktable.camctl, NULL, "shutterspeed");
   const char *value = dt_camctl_camera_property_get_first_choice(darktable.camctl, NULL, "shutterspeed");
 
+  /* set exposure in case of bulb mode */
+  if(params->bulb_time)
+  {
+    if(!darktable.camctl->active_camera->can_bulb)
+    {
+      dt_control_log(_("The camera does not support bulb mode"));
+      free(params);
+      return 1;
+    }
+    const char *str=dt_camctl_camera_property_get_first_choice(darktable.camctl, NULL, "shutterspeed");
+    dt_camctl_camera_set_property_string(darktable.camctl, NULL, "shutterspeed", str);
+  }
+
   /* get values for bracketing */
   if(params->brackets && expprogram && expprogram[0] == 'M' && value && cvalue)
   {
@@ -126,6 +141,7 @@ static int32_t dt_camera_capture_job_run(dt_job_t *job)
   dt_progress_t *progress = dt_control_progress_create(darktable.control, TRUE, message);
 
   GList *current_value = g_list_find(values, original_value);
+  double bulb_time=params->bulb_time;
   for(uint32_t i = 0; i < params->count; i++)
   {
     // Delay if active
@@ -136,28 +152,37 @@ static int32_t dt_camera_capture_job_run(dt_job_t *job)
       // If bracket capture, lets set change shutterspeed
       if(params->brackets)
       {
-        if(b == 0)
+        if(params->bulb_time)
         {
-          // First bracket, step down time with (steps*brackets), also check so we never set the longest
-          // shuttertime which would be bulb mode
-          for(uint32_t s = 0; s < (params->steps * params->brackets); s++)
-            if(g_list_next(current_value) && g_list_next(g_list_next(current_value)))
-              current_value = g_list_next(current_value);
+          int32_t n=((int32_t)(b)-params->brackets)*params->steps;
+          bulb_time=params->bulb_time*pow(2.0, n/3.0);
+	  dt_print(DT_DEBUG_CAMCTL, "[camera_control] bulb bracket %f %d\n", bulb_time, n);
         }
         else
         {
-          // Step up with (steps)
-          for(uint32_t s = 0; s < params->steps; s++)
-            if(g_list_previous(current_value)) current_value = g_list_previous(current_value);
+          if(b == 0)
+          {
+            // First bracket, step down time with (steps*brackets), also check so we never set the longest
+            // shuttertime which would be bulb mode
+            for(uint32_t s = 0; s < (params->steps * params->brackets); s++)
+              if(g_list_next(current_value) && g_list_next(g_list_next(current_value)))
+                current_value = g_list_next(current_value);
+          }
+          else
+          {
+            // Step up with (steps)
+            for(uint32_t s = 0; s < params->steps; s++)
+              if(g_list_previous(current_value)) current_value = g_list_previous(current_value);
+          }
+          
+          // set the time property for bracket capture
+          if(current_value)
+            dt_camctl_camera_set_property_string(darktable.camctl, NULL, "shutterspeed", current_value->data);
         }
       }
 
-      // set the time property for bracket capture
-      if(params->brackets && current_value)
-        dt_camctl_camera_set_property_string(darktable.camctl, NULL, "shutterspeed", current_value->data);
-
       // Capture image
-      dt_camctl_camera_capture(darktable.camctl, NULL);
+      dt_camctl_camera_capture(darktable.camctl, NULL, bulb_time);
 
       fraction += 1.0 / total;
       dt_control_progress_set_progress(darktable.control, progress, fraction);
@@ -184,7 +209,7 @@ static int32_t dt_camera_capture_job_run(dt_job_t *job)
 }
 
 dt_job_t *dt_camera_capture_job_create(const char *jobcode, uint32_t delay, uint32_t count, uint32_t brackets,
-                                       uint32_t steps)
+                                       uint32_t steps, uint32_t bulb_time)
 {
   dt_job_t *job = dt_control_job_create(&dt_camera_capture_job_run, "remote capture of image(s)");
   if(!job) return NULL;
@@ -203,6 +228,7 @@ dt_job_t *dt_camera_capture_job_create(const char *jobcode, uint32_t delay, uint
   params->count = count;
   params->brackets = brackets;
   params->steps = steps;
+  params->bulb_time = bulb_time;
   return job;
 }
 
