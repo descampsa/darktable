@@ -1441,6 +1441,40 @@ void dtgtk_cairo_paint_map_pin(cairo_t *cr, gint x, gint y, gint w, gint h, gint
   cairo_fill(cr);
 }
 
+/** paint bulb mode icon */
+void dtgtk_cairo_paint_bulb(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags)
+{
+  /* moon */
+  gint s = w < h ? w : h;
+  cairo_translate(cr, x + (w / 2.) - (s / 2.), y + (h / 2.) - (s / 2.));
+  cairo_scale(cr, s, s);
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+  
+  cairo_move_to(cr, 0.5, 0.0);
+  cairo_arc_negative(cr, 0.5, 0.5, 0.5, -M_PI/2, M_PI/2);
+  cairo_arc(cr, 0.75, 0.5, sqrt(1.25)/2, 3*M_PI/4, -3*M_PI/4);
+  cairo_fill(cr);
+  
+  /* star */
+  const float r1 = 0.1;
+  const float r2 = 0.2;
+  const float cx=0.8;
+  const float cy=0.2;
+  const float d = 2.0 * M_PI * 0.1f;
+  const float dx[10] = { sinf(0.0),   sinf(d),     sinf(2 * d), sinf(3 * d), sinf(4 * d),
+                         sinf(5 * d), sinf(6 * d), sinf(7 * d), sinf(8 * d), sinf(9 * d) };
+  const float dy[10] = { cosf(0.0),   cosf(d),     cosf(2 * d), cosf(3 * d), cosf(4 * d),
+                         cosf(5 * d), cosf(6 * d), cosf(7 * d), cosf(8 * d), cosf(9 * d) };
+  cairo_move_to(cr, cx + r1 * dx[0], cy - r1 * dy[0]);
+  for(int k = 1; k < 10; k++)
+    if(k & 1)
+      cairo_line_to(cr, cx + r2 * dx[k], cy - r2 * dy[k]);
+    else
+      cairo_line_to(cr, cx + r1 * dx[k], cy - r1 * dy[k]);
+  cairo_close_path(cr);
+  cairo_fill(cr);
+}
+
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-space on;

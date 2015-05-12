@@ -173,6 +173,8 @@ void dtgtk_cairo_paint_masks_difference(cairo_t *cr, gint x, gint y, gint w, gin
 void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
 /** Paint a used icon for masks*/
 void dtgtk_cairo_paint_masks_used(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
+/** paint bulb mode icon */
+void dtgtk_cairo_paint_bulb(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
 
 #endif
 
