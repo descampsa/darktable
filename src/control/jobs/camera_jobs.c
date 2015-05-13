@@ -115,21 +115,24 @@ static int32_t dt_camera_capture_job_run(dt_job_t *job)
   }
 
   /* get values for bracketing */
-  if(params->brackets && expprogram && expprogram[0] == 'M' && value && cvalue)
+  if(expprogram && expprogram[0] == 'M')
   {
-    do
+    if(params->brackets && value && cvalue)
     {
-      // Add value to list
-      values = g_list_append(values, g_strdup(value));
-      // Check if current values is the same as original value, then lets store item ptr
-      if(strcmp(value, cvalue) == 0) original_value = g_list_last(values)->data;
-    } while((value = dt_camctl_camera_property_get_next_choice(darktable.camctl, NULL, "shutterspeed"))
-            != NULL);
+      do
+      {
+        // Add value to list
+        values = g_list_append(values, g_strdup(value));
+        // Check if current values is the same as original value, then lets store item ptr
+        if(strcmp(value, cvalue) == 0) original_value = g_list_last(values)->data;
+      } while((value = dt_camctl_camera_property_get_next_choice(darktable.camctl, NULL, "shutterspeed"))
+              != NULL);
+    }
   }
   else
   {
     /* if this was an intended bracket capture bail out */
-    if(params->brackets)
+    if(params->brackets || params->bulb_time)
     {
       dt_control_log(_("please set your camera to manual mode first!"));
       free(params);
